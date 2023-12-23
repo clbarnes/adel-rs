@@ -7,7 +7,10 @@ mod group;
 mod record;
 mod unit;
 
-pub use self::unit::Unit;
+pub use file::File;
+pub use group::Group;
+pub use record::Record;
+pub use unit::Unit;
 
 pub trait Token {
     fn is_separator(&self) -> bool;

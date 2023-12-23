@@ -8,7 +8,7 @@ use utf8_read::Error as Utf8Error;
 
 mod parse;
 
-use parse::Unit;
+use parse::{Group, Record, Unit};
 
 // this may not be worth the lock hassle
 static CONTROL_CHARS: OnceLock<HashSet<char>> = OnceLock::new();
@@ -45,6 +45,7 @@ impl ContainsControlChar {
 struct AdelWriter<W: Write> {
     inner: W,
     buffer: [u8; 4],
+    next_sep: bool,
 }
 
 impl<W: Write> From<W> for AdelWriter<W> {
@@ -52,6 +53,7 @@ impl<W: Write> From<W> for AdelWriter<W> {
         Self {
             inner: value,
             buffer: [0; 4],
+            next_sep: false,
         }
     }
 }
@@ -62,23 +64,91 @@ impl<W: Write> AdelWriter<W> {
         self.inner.write_all(sl.as_bytes()).map(|_| self)
     }
 
-    fn write_unit(&mut self, unit: Unit) -> io::Result<&mut Self> {
+    fn check_next_char(&mut self, next_sep: bool) -> io::Result<()> {
+        if next_sep != self.next_sep {
+            let msg = if self.next_sep {
+                "Expected next char to be a separator"
+            } else {
+                "Expected next char to be a non-separator"
+            };
+            Err(io::Error::new(io::ErrorKind::InvalidInput, msg))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn write_unit(&mut self, unit: &Unit) -> io::Result<&mut Self> {
+        self.check_next_char(false)?;
+        self.next_sep = true;
         self.inner.write_all(unit.as_str().as_bytes()).map(|_| self)
     }
 
+    fn write_record<'a, T: IntoIterator<Item = &'a Unit>>(
+        &mut self,
+        item: T,
+    ) -> io::Result<&mut Self> {
+        self.check_next_char(false)?;
+        let mut it = item.into_iter();
+        let Some(u) = it.next() else { return Ok(self) };
+        self.write_unit(u)?;
+        for i in it {
+            self.write_us()?;
+            self.write_unit(i)?;
+        }
+        Ok(self)
+    }
+
+    fn write_group<'a, T: IntoIterator<Item = &'a Record>>(
+        &mut self,
+        item: T,
+    ) -> io::Result<&mut Self> {
+        self.check_next_char(false)?;
+        let mut it = item.into_iter();
+        let Some(u) = it.next() else { return Ok(self) };
+        self.write_record(u)?;
+        for i in it {
+            self.write_gs()?;
+            self.write_record(i)?;
+        }
+        Ok(self)
+    }
+
+    fn write_file<'a, T: IntoIterator<Item = &'a Group>>(
+        &mut self,
+        item: T,
+    ) -> io::Result<&mut Self> {
+        self.check_next_char(false)?;
+        let mut it = item.into_iter();
+        let Some(u) = it.next() else { return Ok(self) };
+        self.write_group(u)?;
+        for i in it {
+            self.write_fs()?;
+            self.write_group(i)?;
+        }
+        Ok(self)
+    }
+
     fn write_us(&mut self) -> io::Result<&mut Self> {
+        self.check_next_char(true)?;
+        self.next_sep = false;
         self.write_char(US)
     }
 
     fn write_rs(&mut self) -> io::Result<&mut Self> {
+        self.check_next_char(true)?;
+        self.next_sep = false;
         self.write_char(RS)
     }
 
     fn write_gs(&mut self) -> io::Result<&mut Self> {
+        self.check_next_char(true)?;
+        self.next_sep = false;
         self.write_char(GS)
     }
 
     fn write_fs(&mut self) -> io::Result<&mut Self> {
+        self.check_next_char(true)?;
+        self.next_sep = false;
         self.write_char(FS)
     }
 }
